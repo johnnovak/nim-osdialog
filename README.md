@@ -18,8 +18,8 @@ build the examples by executing the following command:
 
 ## Notes
 
-Only the file dialog related functions have been wrapped (the others don't
-really work anyway).
+Only the file dialog related functionality has been wrapped as the rest (color
+picker, alert boxes) does not work on OS X.
 
 ## License
 

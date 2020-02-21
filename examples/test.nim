@@ -46,7 +46,7 @@ proc main() =
     echo "file open dir in cwd"
 
     filename = fileDialog(fdOpenFile, path=".", filename="こんにちは",
-                          filters="Source:c,cpp,mHeader:h,hpp")
+                          filters="Source:c,cpp,m;Header:h,hpp")
     if filename != "":
       echo "\t", filename
     else:
@@ -57,7 +57,7 @@ proc main() =
     echo "file save in cwd"
 
     filename = fileDialog(fdSaveFile, path=".", filename="こんにちは",
-                          filters="Source:c,cpp,mHeader:h,hpp")
+                          filters="Source:c,cpp,m;Header:h,hpp")
     if filename != "":
       echo "\t", filename
     else:
