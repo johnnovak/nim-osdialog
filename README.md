@@ -1,6 +1,6 @@
 # nim-osdialog
 
-*Nim wrapper for the C [osdialog](https://github.com/memononen/nanovg)
+*Nim wrapper for the C [osdialog](https://github.com/AndrewBelt/osdialog)
 library*
 
 ## Installation
@@ -18,4 +18,13 @@ build the examples by executing the following command:
 
 ## Notes
 
-Only the file dialog related functions have been wrapped.
+Only the file dialog related functions have been wrapped (the others don't
+really work anyway).
+
+## License
+
+osdialog is released into the public domain (CC0).
+
+The wrapper is released under the [Do What The Fuck You Want To Public
+License, Version 2](http://www.wtfpl.net/), as published by Sam Hocevar.
+
