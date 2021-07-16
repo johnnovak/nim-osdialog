@@ -1,6 +1,11 @@
 import osdialog/wrapper
 
 export wrapper.FileDialog
+export wrapper.FileDialog
+
+export wrapper.MessageBoxLevel
+export wrapper.MessageBoxButtons
+export wrapper.osdialog_message
 
 
 proc c_free(p: pointer) {. importc: "free", header: "<stdlib.h>".}
