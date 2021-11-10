@@ -100,7 +100,7 @@ char* osdialog_file(osdialog_file_action action, const char* path, const char* f
 			bInfo.lParam = (LPARAM) pathW;
 		}
 
-		PIDLIST_ABSOLUTE lpItem = SHBrowseForFolderW(&bInfo);
+		LPITEMIDLIST lpItem = SHBrowseForFolderW(&bInfo);
 		if (lpItem) {
 			SHGetPathFromIDListW(lpItem, szDir);
 			result = wchar_to_utf8(szDir);
