@@ -1,6 +1,6 @@
 # Package
 
-version       = "0.1.0"
+version       = "0.1.1"
 author        = "John Novak <john@johnnovak.net>"
 description   = "Nim wrapper for the osdialog library"
 license       = "WTFPL"
