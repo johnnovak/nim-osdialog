@@ -14,7 +14,7 @@ elif defined(linux):
       compile: "src/osdialog_gtk2.c".}
 
   elif defined(osdialogGtk3):
-    {.passC: CFLAGS &  CFLAGS & staticExec("pkg-config --cflags gtk+-3.0"),
+    {.passC: CFLAGS & staticExec("pkg-config --cflags gtk+-3.0"),
       passL: staticExec("pkg-config --libs gtk+-3.0"),
       compile: "src/osdialog_gtk3.c".}
 
