@@ -9,10 +9,14 @@ elif defined(macosx):
 
 elif defined(linux):
   when defined(osdialogGtk2):
-    {.passC: CFLAGS, compile: "src/osdialog_gtk2.c".}
+    {.passC: CFLAGS & staticExec("pkg-config --cflags gtk+-2.0"),
+      passL: staticExec("pkg-config --libs gtk+-2.0"),
+      compile: "src/osdialog_gtk2.c".}
 
   elif defined(osdialogGtk3):
-    {.passC: CFLAGS, compile: "src/osdialog_gtk3.c".}
+    {.passC: CFLAGS &  CFLAGS & staticExec("pkg-config --cflags gtk+-3.0"),
+      passL: staticExec("pkg-config --libs gtk+-3.0"),
+      compile: "src/osdialog_gtk3.c".}
 
   elif defined(osdialogZenity):
     {.passC: CFLAGS, compile: "src/osdialog_zenity.c".}
