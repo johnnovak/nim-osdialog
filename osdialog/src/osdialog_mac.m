@@ -3,8 +3,24 @@
 #include "osdialog.h"
 
 
+extern osdialog_save_callback osdialog_save_cb;
+extern osdialog_restore_callback osdialog_restore_cb;
+
+#define SAVE_CALLBACK \
+	void* cb_ptr = NULL; \
+	if (osdialog_save_cb) { \
+		cb_ptr = osdialog_save_cb(); \
+	}
+
+#define RESTORE_CALLBACK \
+	if (osdialog_restore_cb) { \
+		osdialog_restore_cb(cb_ptr); \
+	}
+
+
 int osdialog_message(osdialog_message_level level, osdialog_message_buttons buttons, const char* message) {
 	@autoreleasepool {
+		SAVE_CALLBACK
 
 		NSWindow* keyWindow = [[NSApplication sharedApplication] keyWindow];
 
@@ -46,14 +62,19 @@ int osdialog_message(osdialog_message_level level, osdialog_message_buttons butt
 		NSInteger button = [alert runModal];
 
 		[keyWindow makeKeyAndOrderFront:nil];
+		bool success = (button == NSAlertFirstButtonReturn);
 
-		return (button == NSAlertFirstButtonReturn);
+		RESTORE_CALLBACK
+
+		return success;
 	} // @autoreleasepool
 }
 
 
 char* osdialog_prompt(osdialog_message_level level, const char* message, const char* text) {
 	@autoreleasepool {
+
+		SAVE_CALLBACK
 
 		NSWindow* keyWindow = [[NSApplication sharedApplication] keyWindow];
 
@@ -92,18 +113,23 @@ char* osdialog_prompt(osdialog_message_level level, const char* message, const c
 		if (button == NSAlertFirstButtonReturn) {
 			[input validateEditing];
 			NSString* result_str = [input stringValue];
-			result = osdialog_strndup([result_str UTF8String], [result_str length]);
+			// Don't use NSString.length because it returns the number of the UTF-16 code units, not the number of bytes.
+			result = osdialog_strdup([result_str UTF8String]);
 		}
 
 		[keyWindow makeKeyAndOrderFront:nil];
+
+		RESTORE_CALLBACK
 
 		return result;
 	} // @autoreleasepool
 }
 
 
-char* osdialog_file(osdialog_file_action action, const char* path, const char* filename, osdialog_filters* filters) {
+char* osdialog_file(osdialog_file_action action, const char* dir, const char* filename, osdialog_filters* filters) {
 	@autoreleasepool {
+
+		SAVE_CALLBACK
 
 		NSWindow* keyWindow = [[NSApplication sharedApplication] keyWindow];
 
@@ -149,10 +175,10 @@ char* osdialog_file(osdialog_file_action action, const char* path, const char* f
 			[open_panel setCanChooseFiles:NO];
 		}
 
-		if (path) {
-			NSString* path_str = [NSString stringWithUTF8String:path];
-			NSURL* path_url = [NSURL fileURLWithPath:path_str];
-			[panel setDirectoryURL:path_url];
+		if (dir) {
+			NSString* dir_str = [NSString stringWithUTF8String:dir];
+			NSURL* dir_url = [NSURL fileURLWithPath:dir_str];
+			[panel setDirectoryURL:dir_url];
 		}
 
 		if (filename) {
@@ -171,10 +197,13 @@ char* osdialog_file(osdialog_file_action action, const char* path, const char* f
 		if (response == OK) {
 			NSURL* result_url = [panel URL];
 			NSString* result_str = [result_url path];
-			result = osdialog_strndup([result_str UTF8String], [result_str length]);
+			// Don't use NSString.length because it returns the number of the UTF-16 code units, not the number of bytes.
+			result = osdialog_strdup([result_str UTF8String]);
 		}
 
 		[keyWindow makeKeyAndOrderFront:nil];
+
+		RESTORE_CALLBACK
 
 		return result;
 	} // @autoreleasepool
@@ -182,22 +211,55 @@ char* osdialog_file(osdialog_file_action action, const char* path, const char* f
 
 
 int osdialog_color_picker(osdialog_color* color, int opacity) {
-	assert(0);
+	if (!color)
+		return 0;
 
 	@autoreleasepool {
 
-		// TODO I have no idea what I'm doing here
+		SAVE_CALLBACK
+
+		NSWindow* keyWindow = [[NSApplication sharedApplication] keyWindow];
+
+		// Set default picker tab
+		// [NSColorPanel setPickerMode:NSColorPanelModeWheel];
+
+		// Get color panel instance
 		NSColorPanel* panel = [NSColorPanel sharedColorPanel];
-		// [panel setDelegate:self];
-		[panel isVisible];
 
-		// if (opacity)
-		// 	[panel setShowAlpha:YES];
-		// else
-		// 	[panel setShowAlpha:NO];
+		// Set color
+		NSColor* c = [NSColor colorWithCalibratedRed:color->r / 255.f green:color->g / 255.f blue:color->b / 255.f alpha:color->a / 255.f];
+		[panel setColor:c];
+		[panel setShowsAlpha:(bool) opacity];
 
-		// [panel makeKeyAndOrderFront:self];
+		// Run panel as a modal window
+		NSModalSession modal = [NSApp beginModalSessionForWindow:panel];
 
-		return 0;
+		// Wait until user hides modal with X
+		for (;;) {
+			[[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode beforeDate:[NSDate distantFuture]];
+			if ([NSApp runModalSession:modal] != NSModalResponseContinue)
+				break;
+			if (![panel isVisible])
+				break;
+		}
+
+		[NSApp endModalSession:modal];
+
+		// Get color
+		c = [panel color];
+		NSColor* cRGB = [c colorUsingColorSpaceName:NSCalibratedRGBColorSpace];
+		CGFloat r, g, b, a;
+		[cRGB getRed:&r green:&g blue:&b alpha:&a];
+		color->r = r * 255.f;
+		color->g = g * 255.f;
+		color->b = b * 255.f;
+		color->a = a * 255.f;
+
+		[keyWindow makeKeyAndOrderFront:nil];
+
+		RESTORE_CALLBACK
+
+		// Always accept user choice
+		return 1;
 	} // @autoreleasepool
 }

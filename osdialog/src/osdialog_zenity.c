@@ -1,15 +1,16 @@
-#include <assert.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
+#include <errno.h>
 #include <unistd.h>
-#include <sys/wait.h>
+#include <sys/wait.h> // for waitpid
 #include "osdialog.h"
 
 
-static const char zenityBin[] = "/usr/bin/zenity";
+static const char zenityBin[] = "zenity";
 
 
-static void clear_string_list(char** list) {
+static void string_list_clear(char** list) {
 	while (*list) {
 		OSDIALOG_FREE(*list);
 		*list = NULL;
@@ -18,27 +19,70 @@ static void clear_string_list(char** list) {
 }
 
 
-static int exec_string_list(const char* path, char** args) {
+static int string_list_exec(const char* path, const char* const* args, char* outBuf, size_t outLen, char* errBuf, size_t errLen) {
+	int outStream[2];
+	if (outBuf)
+		if (pipe(outStream) == -1)
+			return -1;
+
+	int errStream[2];
+	if (errBuf)
+		if (pipe(errStream) == -1)
+			return -1;
+
 	// The classic fork-and-exec routine
-	pid_t cid = fork();
-	if (cid < 0) {
+	pid_t pid = fork();
+	if (pid < 0) {
 		return -1;
 	}
-	else if (cid == 0) {
+	else if (pid == 0) {
 		// child process
-		int err = execv(path, args);
+		// Route stdout to outStream
+		if (outBuf) {
+			while ((dup2(outStream[1], STDOUT_FILENO) == -1) && (errno == EINTR)) {}
+			close(outStream[0]);
+			close(outStream[1]);
+		}
+		// Route stdout to outStream
+		if (errBuf) {
+			while ((dup2(errStream[1], STDERR_FILENO) == -1) && (errno == EINTR)) {}
+			close(errStream[0]);
+			close(errStream[1]);
+		}
+		// POSIX guarantees that execvp does not modify the args array, so it's safe to remove const with a cast.
+		int err = execvp(path, (char* const*) args);
 		if (err)
 			exit(0);
+		// Will never reach
+		exit(0);
 	}
-	else if (cid > 0) {
-		// parent process
-		int status = -1;
-		int options = 0;
-		waitpid(cid, &status, options);
-		return status;
+
+	// parent process
+	// Close the pipe inputs because the parent doesn't need them
+	if (outBuf)
+		close(outStream[1]);
+	if (errBuf)
+		close(errStream[1]);
+	// Wait for child process to close
+	int status = -1;
+	int options = 0;
+	waitpid(pid, &status, options);
+	// Read streams
+	if (outBuf) {
+		ssize_t count = read(outStream[0], outBuf, outLen - 1);
+		if (count < 0)
+			count = 0;
+		outBuf[count] = '\0';
+		close(outStream[0]);
 	}
-	// Will never reach
-	return -1;
+	if (errBuf) {
+		ssize_t count = read(errStream[0], errBuf, errLen - 1);
+		if (count < 0)
+			count = 0;
+		errBuf[count] = '\0';
+		close(errStream[0]);
+	}
+	return status;
 }
 
 
@@ -50,6 +94,11 @@ int osdialog_message(osdialog_message_level level, osdialog_message_buttons butt
 	// The API doesn't provide a title, so just make it blank.
 	args[argIndex++] = osdialog_strdup("--title");
 	args[argIndex++] = osdialog_strdup("");
+
+	args[argIndex++] = osdialog_strdup("--no-markup");
+
+	args[argIndex++] = osdialog_strdup("--width");
+	args[argIndex++] = osdialog_strdup("500");
 
 	if (buttons == OSDIALOG_OK_CANCEL) {
 		args[argIndex++] = osdialog_strdup("--question");
@@ -79,30 +128,65 @@ int osdialog_message(osdialog_message_level level, osdialog_message_buttons butt
 	args[argIndex++] = osdialog_strdup(message);
 
 	args[argIndex++] = NULL;
-	int ret = exec_string_list(zenityBin, args);
-	clear_string_list(args);
+	int ret = string_list_exec(zenityBin, (const char* const*) args, NULL, 0, NULL, 0);
+	string_list_clear(args);
 	return ret == 0;
 }
 
 
 char* osdialog_prompt(osdialog_message_level level, const char* message, const char* text) {
+	(void) level;
 	char* args[32];
 	int argIndex = 0;
 
 	args[argIndex++] = osdialog_strdup(zenityBin);
 	args[argIndex++] = osdialog_strdup("--title");
 	args[argIndex++] = osdialog_strdup("");
+	args[argIndex++] = osdialog_strdup("--entry");
+	args[argIndex++] = osdialog_strdup("--text");
+	args[argIndex++] = osdialog_strdup(message ? message : "");
+	args[argIndex++] = osdialog_strdup("--entry-text");
+	args[argIndex++] = osdialog_strdup(text ? text : "");
 	// Unfortunately the level is ignored
 
 	args[argIndex++] = NULL;
-	int ret = exec_string_list(zenityBin, args);
-	clear_string_list(args);
-	// TODO
-	return NULL;
+	char outBuf[4096 + 1];
+	int ret = string_list_exec(zenityBin, (const char* const*) args, outBuf, sizeof(outBuf), NULL, 0);
+	string_list_clear(args);
+	if (ret != 0)
+		return NULL;
+
+	// Remove trailing newline
+	size_t outLen = strlen(outBuf);
+	if (outLen > 0)
+		outBuf[outLen - 1] = '\0';
+	return osdialog_strdup(outBuf);
 }
 
 
-char* osdialog_file(osdialog_file_action action, const char* path, const char* filename, osdialog_filters* filters) {
+static int supports_confirm_overwrite() {
+	char* args[32];
+	int argIndex = 0;
+
+	args[argIndex++] = osdialog_strdup(zenityBin);
+	args[argIndex++] = osdialog_strdup("--help-file-selection");
+	args[argIndex++] = NULL;
+
+	char outBuf[1 << 12];
+	int ret = string_list_exec(zenityBin, (const char* const*) args, outBuf, sizeof(outBuf), NULL, 0);
+	string_list_clear(args);
+
+	if (ret != 0)
+		return 0;
+
+	return strstr(outBuf, "--confirm-overwrite") != NULL;
+}
+
+
+static int supports_confirm_overwrite_cached = -1;
+
+
+char* osdialog_file(osdialog_file_action action, const char* dir, const char* filename, osdialog_filters* filters) {
 	char* args[32];
 	int argIndex = 0;
 
@@ -111,26 +195,73 @@ char* osdialog_file(osdialog_file_action action, const char* path, const char* f
 	args[argIndex++] = osdialog_strdup("");
 	args[argIndex++] = osdialog_strdup("--file-selection");
 	if (action == OSDIALOG_OPEN) {
+		// This is the default
 	}
 	else if (action == OSDIALOG_OPEN_DIR) {
 		args[argIndex++] = osdialog_strdup("--directory");
 	}
 	else if (action == OSDIALOG_SAVE) {
 		args[argIndex++] = osdialog_strdup("--save");
-		args[argIndex++] = osdialog_strdup("--confirm-overwrite");
+
+		// --confirm-overwrite was (accidentally?) removed in Zenity 3.91.0, so using this flag causes Zenity to fail.
+		if (supports_confirm_overwrite_cached < 0) {
+			supports_confirm_overwrite_cached = supports_confirm_overwrite();
+		}
+		if (supports_confirm_overwrite_cached) {
+			args[argIndex++] = osdialog_strdup("--confirm-overwrite");
+		}
 	}
 
-	if (path) {
+	if (dir || filename) {
 		args[argIndex++] = osdialog_strdup("--filename");
-		args[argIndex++] = osdialog_strdup(path);
+		char buf[4096];
+		if (dir) {
+			// If we don't add a slash, the open dialog will open in the parent directory.
+			// If a slash is already present, a second one will have no effect.
+			snprintf(buf, sizeof(buf), "%s/%s", dir, filename ? filename : "");
+		}
+		else {
+			snprintf(buf, sizeof(buf), "%s", filename);
+		}
+		args[argIndex++] = osdialog_strdup(buf);
 	}
-	// TODO file filters
+
+	for (osdialog_filters* filter = filters; filter; filter = filter->next) {
+		args[argIndex++] = osdialog_strdup("--file-filter");
+
+		// Set pattern name
+		char patternBuf[1024];
+		char* patternPtr = patternBuf;
+		const char* patternEnd = patternBuf + sizeof(patternBuf);
+		int len = snprintf(patternPtr, patternEnd - patternPtr, "%s |", filter->name);
+		if (len < 0)
+			continue;
+		patternPtr += len;
+
+		// Append pattern
+		for (osdialog_filter_patterns* pattern = filter->patterns; pattern; pattern = pattern->next) {
+			if (patternPtr >= patternEnd)
+				break;
+			int len = snprintf(patternPtr, patternEnd - patternPtr, " *.%s", pattern->pattern);
+			if (len < 0)
+				continue;
+			patternPtr += len;
+		}
+		args[argIndex++] = osdialog_strdup(patternBuf);
+	}
 
 	args[argIndex++] = NULL;
-	int ret = exec_string_list(zenityBin, args);
-	clear_string_list(args);
-	// TODO
-	return NULL;
+	char outBuf[4096 + 1];
+	int ret = string_list_exec(zenityBin, (const char* const*) args, outBuf, sizeof(outBuf), NULL, 0);
+	string_list_clear(args);
+	if (ret != 0)
+		return NULL;
+
+	// Remove trailing newline
+	size_t outLen = strlen(outBuf);
+	if (outLen > 0)
+		outBuf[outLen - 1] = '\0';
+	return osdialog_strdup(outBuf);
 }
 
 
@@ -141,12 +272,41 @@ int osdialog_color_picker(osdialog_color* color, int opacity) {
 	args[argIndex++] = osdialog_strdup(zenityBin);
 	args[argIndex++] = osdialog_strdup("--title");
 	args[argIndex++] = osdialog_strdup("");
-	// Unfortunately the level is ignored
 	args[argIndex++] = osdialog_strdup("--color-selection");
 
+	if (!opacity) {
+		color->a = 255;
+	}
+
+	// Convert osdialog_color to string
+	char buf[128];
+	snprintf(buf, sizeof(buf), "rgba(%d,%d,%d,%f)", color->r, color->g, color->b, color->a / 255.f);
+	args[argIndex++] = osdialog_strdup("--color");
+	args[argIndex++] = osdialog_strdup(buf);
+
 	args[argIndex++] = NULL;
-	int ret = exec_string_list(zenityBin, args);
-	clear_string_list(args);
-	// TODO
-	return 0;
+	int ret = string_list_exec(zenityBin, (const char* const*) args, buf, sizeof(buf), NULL, 0);
+	string_list_clear(args);
+	if (ret != 0)
+		return 0;
+
+	// Convert string to osdialog_color
+	int r = 0, g = 0, b = 0;
+	float a = 1.f;
+	if (buf[3] == 'a') {
+		sscanf(buf, "rgba(%d,%d,%d,%f)", &r, &g, &b, &a);
+	}
+	else {
+		sscanf(buf, "rgb(%d,%d,%d)", &r, &g, &b);
+	}
+	color->r = r;
+	color->g = g;
+	color->b = b;
+	color->a = (int) (a * 255.f);
+
+	if (!opacity) {
+		color->a = 255;
+	}
+
+	return 1;
 }

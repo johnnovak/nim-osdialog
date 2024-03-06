@@ -63,21 +63,33 @@ osdialog_filters* osdialog_filters_parse(const char* str) {
 	return filters_head;
 }
 
-static void patterns_free(osdialog_filter_patterns* patterns) {
+void osdialog_filter_patterns_free(osdialog_filter_patterns* patterns) {
 	if (!patterns)
 		return;
 	OSDIALOG_FREE(patterns->pattern);
 	osdialog_filter_patterns* next = patterns->next;
 	OSDIALOG_FREE(patterns);
-	patterns_free(next);
+	osdialog_filter_patterns_free(next);
 }
 
 void osdialog_filters_free(osdialog_filters* filters) {
 	if (!filters)
 		return;
 	OSDIALOG_FREE(filters->name);
-	patterns_free(filters->patterns);
+	osdialog_filter_patterns_free(filters->patterns);
 	osdialog_filters* next = filters->next;
 	OSDIALOG_FREE(filters);
 	osdialog_filters_free(next);
+}
+
+
+osdialog_save_callback osdialog_save_cb = NULL;
+osdialog_restore_callback osdialog_restore_cb = NULL;
+
+void osdialog_set_save_callback(osdialog_save_callback cb) {
+	osdialog_save_cb = cb;
+}
+
+void osdialog_set_restore_callback(osdialog_restore_callback cb) {
+	osdialog_restore_cb = cb;
 }

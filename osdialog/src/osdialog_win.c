@@ -1,10 +1,24 @@
 #include <string.h>
 #include <stdio.h>
-#include <assert.h>
 #include <windows.h>
 #include <commdlg.h>
 #include <shlobj.h>
 #include "osdialog.h"
+
+
+extern osdialog_save_callback osdialog_save_cb;
+extern osdialog_restore_callback osdialog_restore_cb;
+
+#define SAVE_CALLBACK \
+	void* cb_ptr = NULL; \
+	if (osdialog_save_cb) { \
+		cb_ptr = osdialog_save_cb(); \
+	}
+
+#define RESTORE_CALLBACK \
+	if (osdialog_restore_cb) { \
+		osdialog_restore_cb(cb_ptr); \
+	}
 
 
 static char* wchar_to_utf8(const wchar_t* s) {
@@ -31,6 +45,8 @@ static wchar_t* utf8_to_wchar(const char* s) {
 
 
 int osdialog_message(osdialog_message_level level, osdialog_message_buttons buttons, const char* message) {
+	SAVE_CALLBACK
+
 	UINT type = MB_APPLMODAL;
 	switch (level) {
 		default:
@@ -51,6 +67,8 @@ int osdialog_message(osdialog_message_level level, osdialog_message_buttons butt
 	int result = MessageBoxW(window, messageW, L"", type);
 	OSDIALOG_FREE(messageW);
 
+	RESTORE_CALLBACK
+
 	switch (result) {
 		case IDOK:
 		case IDYES:
@@ -61,80 +79,241 @@ int osdialog_message(osdialog_message_level level, osdialog_message_buttons butt
 }
 
 
+/*
+Helpful resources:
+https://docs.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-dlgtemplate
+https://stackoverflow.com/a/2270250/272642
+*/
+#define DLG_FONT L"MS Shell Dlg"
+#define DLG_OK L"&OK"
+#define DLG_CANCEL L"&Cancel"
+#define LENGTHOF(a) (sizeof(a) / sizeof((a)[0]))
+
+#pragma pack(push, 4)
+static struct {
+	DWORD style;
+	DWORD dwExtendedStyle;
+	WORD  cdit; // number of controls
+	short x;
+	short y;
+	short cx;
+	short cy;
+	WORD menu;
+	WORD windowClass;
+	WCHAR title[1];
+	short pointSize;
+	WCHAR typeface[LENGTHOF(DLG_FONT)];
+
+	struct {
+		DWORD style;
+		DWORD dwExtendedStyle;
+		short x;
+		short y;
+		short cx;
+		short cy;
+		WORD  id;
+		WORD sysClass; // 0xFFFF identifies a system window class
+		WORD idClass; // ordinal of a system window class
+		WCHAR title[1];
+		WORD cbCreationData; // bytes of following creation data
+	} edit;
+
+	struct {
+		DWORD style;
+		DWORD dwExtendedStyle;
+		short x;
+		short y;
+		short cx;
+		short cy;
+		WORD  id;
+		WORD sysClass; // 0xFFFF identifies a system window class
+		WORD idClass; // ordinal of a system window class
+		WCHAR title[LENGTHOF(DLG_OK)];
+		WORD cbCreationData; // bytes of following creation data
+	} ok;
+
+	struct {
+		DWORD style;
+		DWORD dwExtendedStyle;
+		short x;
+		short y;
+		short cx;
+		short cy;
+		WORD  id;
+		WORD sysClass; // 0xFFFF identifies a system window class
+		WORD idClass; // ordinal of a system window class
+		WCHAR title[LENGTHOF(DLG_CANCEL)];
+		WORD cbCreationData; // bytes of following creation data
+	} cancel;
+
+} promptTemplate = {
+	WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU | DS_MODALFRAME | DS_CENTER | DS_SHELLFONT,
+	0x0, // dwExtendedStyle
+	3, // cdit
+	0, 0, 5+200+10+50+5+50+5, 5+14+5,
+	0, // menu
+	0, // windowClass
+	L"", // title
+	8, // typeface
+	DLG_FONT,
+
+	{
+		WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER | ES_LEFT | ES_AUTOHSCROLL,
+		WS_EX_NOPARENTNOTIFY,
+		5, 5, 200, 14,
+		42,
+		0xFFFF, 0x0081, // Edit
+		L"", 0,
+	},
+
+	{
+		WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
+		WS_EX_NOPARENTNOTIFY,
+		5+200+10, 5, 50, 14,
+		IDOK,
+		0xFFFF, 0x0080, // Button
+		DLG_OK, 0,
+	},
+
+	{
+		WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+		WS_EX_NOPARENTNOTIFY,
+		5+200+10+50+5, 5, 50, 14,
+		IDCANCEL,
+		0xFFFF, 0x0080, // Button
+		DLG_CANCEL, 0,
+	},
+};
+#pragma pack(pop)
+
+static wchar_t promptBuffer[1 << 13] = L"";
+
+static INT_PTR CALLBACK promptProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam) {
+	(void) lParam;
+
+	switch (message) {
+		case WM_INITDIALOG: {
+			SendDlgItemMessageW(hDlg, 42, WM_SETTEXT, (WPARAM) 0, (LPARAM) promptBuffer);
+			return TRUE;
+		} break;
+
+		case WM_DESTROY: {
+			EndDialog(hDlg, 0);
+			return TRUE;
+		} break;
+
+		case WM_COMMAND: {
+			switch (wParam) {
+				case IDOK: {
+					int len = SendDlgItemMessageW(hDlg, 42, WM_GETTEXT, (WPARAM) LENGTHOF(promptBuffer), (LPARAM) promptBuffer);
+					(void) len;
+					EndDialog(hDlg, 1);
+					return TRUE;
+				} break;
+
+				case IDCANCEL: {
+					EndDialog(hDlg, 0);
+					return TRUE;
+				} break;
+			}
+		} break;
+	}
+	return FALSE;
+}
+
 char* osdialog_prompt(osdialog_message_level level, const char* message, const char* text) {
-	// TODO
 	(void) level;
 	(void) message;
-	(void) text;
-	assert(0);
+
+	SAVE_CALLBACK
+
+	promptBuffer[0] = 0;
+	if (text) {
+		MultiByteToWideChar(CP_UTF8, 0, text, -1, promptBuffer, LENGTHOF(promptBuffer));
+	}
+
+	HWND window = GetActiveWindow();
+	int res = DialogBoxIndirectParamW(NULL, (LPCDLGTEMPLATEW) &promptTemplate, window, promptProc, (LPARAM) NULL);
+
+	RESTORE_CALLBACK
+
+	if (res) {
+		return wchar_to_utf8(promptBuffer);
+	}
 	return NULL;
 }
 
 
-static INT CALLBACK browseCallbackProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam) {
-	if (Msg == BFFM_INITIALIZED) {
-		SendMessageW(hWnd, BFFM_SETSELECTION, 1, lParam);
+static INT CALLBACK browseCallbackProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
+	(void) wParam;
+
+	if (message == BFFM_INITIALIZED) {
+		SendMessageW(hWnd, BFFM_SETEXPANDED, 1, lParam);
 	}
 	return 0;
 }
 
-char* osdialog_file(osdialog_file_action action, const char* path, const char* filename, osdialog_filters* filters) {
-	char* result = NULL;
+char* osdialog_file(osdialog_file_action action, const char* dir, const char* filename, osdialog_filters* filters) {
+	SAVE_CALLBACK
 
 	if (action == OSDIALOG_OPEN_DIR) {
 		// open directory dialog
-		wchar_t szDir[MAX_PATH] = L"";
-
 		BROWSEINFOW bInfo;
 		ZeroMemory(&bInfo, sizeof(bInfo));
 		bInfo.hwndOwner = GetActiveWindow();
-		// bInfo.pszDisplayName = szDir;
 		bInfo.ulFlags = BIF_RETURNONLYFSDIRS | BIF_USENEWUI;
-		bInfo.iImage = -1;
 
-		// TODO Default paths do not seem to work
-		wchar_t* pathW = NULL;
-		if (path) {
-			pathW = utf8_to_wchar(path);
-			bInfo.lpfn = browseCallbackProc;
-			bInfo.lParam = (LPARAM) pathW;
+		// dir
+		wchar_t initialDir[MAX_PATH] = L"";
+		if (dir) {
+			// We need to convert the path to a canonical absolute path with GetFullPathNameW()
+			wchar_t* dirW = utf8_to_wchar(dir);
+			GetFullPathNameW(dirW, MAX_PATH, initialDir, NULL);
+			OSDIALOG_FREE(dirW);
+			bInfo.lpfn = (BFFCALLBACK) browseCallbackProc;
+			bInfo.lParam = (LPARAM) initialDir;
 		}
 
-		LPITEMIDLIST lpItem = SHBrowseForFolderW(&bInfo);
-		if (lpItem) {
-			SHGetPathFromIDListW(lpItem, szDir);
-			result = wchar_to_utf8(szDir);
+		PIDLIST_ABSOLUTE lpItem = SHBrowseForFolderW(&bInfo);
+
+		RESTORE_CALLBACK
+
+		if (!lpItem) {
+			return NULL;
 		}
-		if (pathW) {
-			OSDIALOG_FREE(pathW);
-		}
+		wchar_t szDir[MAX_PATH] = L"";
+		SHGetPathFromIDListW(lpItem, szDir);
+		return wchar_to_utf8(szDir);
 	}
 	else {
 		// open or save file dialog
 		OPENFILENAMEW ofn;
 		ZeroMemory(&ofn, sizeof(ofn));
-		ofn.hwndOwner = GetActiveWindow();
 		ofn.lStructSize = sizeof(ofn);
+		ofn.hwndOwner = GetActiveWindow();
 		ofn.Flags = OFN_EXPLORER | OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
 
-		// Filename
+		// filename
 		wchar_t strFile[MAX_PATH] = L"";
 		if (filename) {
 			wchar_t* filenameW = utf8_to_wchar(filename);
-			snwprintf(strFile, MAX_PATH, L"%s", filenameW);
+			snwprintf(strFile, MAX_PATH, L"%S", filenameW);
 			OSDIALOG_FREE(filenameW);
 		}
 		ofn.lpstrFile = strFile;
 		ofn.nMaxFile = MAX_PATH;
 
-		// Path
-		wchar_t* strInitialDir = NULL;
-		if (path) {
-			strInitialDir = utf8_to_wchar(path);
+		// dir
+		wchar_t strInitialDir[MAX_PATH] = L"";
+		if (dir) {
+			// We need to convert the dir to a canonical absolute dir with GetFullPathNameW()
+			wchar_t* dirW = utf8_to_wchar(dir);
+			GetFullPathNameW(dirW, MAX_PATH, strInitialDir, NULL);
+			OSDIALOG_FREE(dirW);
+			ofn.lpstrInitialDir = strInitialDir;
 		}
-		ofn.lpstrInitialDir = strInitialDir;
 
-		// Filters
+		// filters
 		wchar_t* strFilter = NULL;
 		if (filters) {
 			char fBuf[4096];
@@ -168,23 +347,24 @@ char* osdialog_file(osdialog_file_action action, const char* path, const char* f
 		}
 
 		// Clean up
-		if (strInitialDir) {
-			OSDIALOG_FREE(strInitialDir);
-		}
 		if (strFilter) {
 			OSDIALOG_FREE(strFilter);
 		}
-		if (success) {
-			result = wchar_to_utf8(strFile);
-		}
-	}
 
-	return result;
+		RESTORE_CALLBACK
+
+		if (!success) {
+			return NULL;
+		}
+		return wchar_to_utf8(strFile);
+	}
 }
 
 
 int osdialog_color_picker(osdialog_color* color, int opacity) {
 	(void) opacity;
+	SAVE_CALLBACK
+
 	if (!color)
 		return 0;
 
@@ -199,7 +379,11 @@ int osdialog_color_picker(osdialog_color* color, int opacity) {
 	cc.rgbResult = c;
 	cc.Flags = CC_FULLOPEN | CC_ANYCOLOR | CC_RGBINIT;
 
-	if (ChooseColor(&cc)) {
+	BOOL success = ChooseColor(&cc);
+
+	RESTORE_CALLBACK
+
+	if (success) {
 		color->r = GetRValue(cc.rgbResult);
 		color->g = GetGValue(cc.rgbResult);
 		color->b = GetBValue(cc.rgbResult);
