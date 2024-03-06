@@ -274,7 +274,7 @@ char* osdialog_file(osdialog_file_action action, const char* dir, const char* fi
 			bInfo.lParam = (LPARAM) initialDir;
 		}
 
-		PIDLIST_ABSOLUTE lpItem = SHBrowseForFolderW(&bInfo);
+		LPITEMIDLIST lpItem = SHBrowseForFolderW(&bInfo);
 
 		RESTORE_CALLBACK
 
